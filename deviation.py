@@ -2,247 +2,261 @@ import numpy as np
 import pandas as pd
 
 
+# =====================================================================
+# INTERPOLATION FUNCTION (SIMPLE + FULLY COMMENTED)
+# =====================================================================
 def interpolate_with_segments(s_orig, x_orig, y_orig, s_grid):
     """
-    Manual linear interpolation on a cumulative distance axis.
+    Linearly interpolate (x, y) coordinates along a cumulative distance axis.
 
-    Parameters:
-        s_orig : 1D array
-            Original cumulative distance values of the trajectory
-            (e.g., [0.0, 0.7, 1.5, ...]).
-        x_orig, y_orig : 1D arrays
-            Original x and y coordinates corresponding to s_orig.
-        s_grid : 1D array
-            Target distance grid where we want interpolated points
-            (e.g., [0.0, 0.25, 0.5, 0.75, ...]).
+    This function answers the question:
+        “If the path has points at distances s_orig,
+         what are the coordinates at distances s_grid?”
 
-    For each grid point g in s_grid, we find the segment index i such that:
-        s_i <= g <= s_{i+1}
+    HOW IT WORKS:
+    -------------
+    - The original path is made of segments:
+            P0 ---- P1 ---- P2 ---- ... ---- Pn
+      where each Pi has cumulative distance s_orig[i].
 
-    Then compute the interpolation fraction:
-        t = (g - s_i) / (s_{i+1} - s_i)
-
-    And use that to compute the interpolated coordinates:
-        x_new = x_i + t * (x_{i+1} - x_i)
-        y_new = y_i + t * (y_{i+1} - y_i)
-
-    Returns:
-        x_new : 1D array
-            Interpolated x-coordinates on s_grid.
-        y_new : 1D array
-            Interpolated y-coordinates on s_grid.
-        seg_idx : 1D int array
-            For each grid point, the index i of the original segment
-            [i, i+1] that was used for interpolation.
+    - For each target distance g in s_grid:
+        1) Find segment [j, j+1] where s_orig[j] <= g <= s_orig[j+1]
+        2) Compute how far between these two points the value g lies (a fraction t)
+        3) Use linear interpolation to find x,y at that exact location.
     """
-    n = len(s_orig)
 
-    # Arrays to hold interpolated coordinates and segment indexces
+    n = len(s_orig)  # number of original points
+
+    # Prepare arrays to store new interpolated results
     x_new = np.zeros_like(s_grid, dtype=float)
     y_new = np.zeros_like(s_grid, dtype=float)
+
+    # Track which original segment created each grid point
     seg_idx = np.zeros_like(s_grid, dtype=int)
 
-    j = 0  # current segment index in the original trajectory
+    j = 0  # start assuming segment [0,1]
 
-    # Loop over all grid points g
+    # Loop over each desired distance value g
     for k, g in enumerate(s_grid):
-        # Move j forward until we find the segment [s_j, s_{j+1}] that contains g
-        # Condition: s_j <= g <= s_{j+1}
-        # We increase j while g is larger than the upper bound s_{j+1}
+
+        # ------------------------------------------------------------
+        # STEP 1: Find which segment contains this distance g
+        # ------------------------------------------------------------
+        # Move j forward while g is still beyond s_orig[j+1]
+        # This guarantees eventually:
+        #      s_orig[j] <= g <= s_orig[j+1]
         while j < n - 2 and g > s_orig[j + 1]:
             j += 1
 
-        # Segment boundaries in the original cumulative distance array
+        # Segment boundaries in "distance space"
         s_i = s_orig[j]
         s_ip1 = s_orig[j + 1]
 
-        # Avoid division by zero in case of a zero-length segment
+        # ------------------------------------------------------------
+        # STEP 2: Compute interpolation fraction
+        # ------------------------------------------------------------
         denom = s_ip1 - s_i
         if denom == 0:
+            # Rare case: two identical s_orig points
             t = 0.0
         else:
-            # Interpolation fraction along the segment [s_i, s_{i+1}]
+            # Fraction of distance between the endpoints
             t = (g - s_i) / denom
 
-        # Original coordinates at the segment endpoints
+        # ------------------------------------------------------------
+        # STEP 3: Get end-point coordinates of the current segment
+        # ------------------------------------------------------------
         x_i = x_orig[j]
         x_ip1 = x_orig[j + 1]
         y_i = y_orig[j]
         y_ip1 = y_orig[j + 1]
 
-        # Linear interpolation for x and y
+        # ------------------------------------------------------------
+        # STEP 4: Linear interpolation in XY space
+        # ------------------------------------------------------------
         x_new[k] = x_i + t * (x_ip1 - x_i)
         y_new[k] = y_i + t * (y_ip1 - y_i)
 
-        # Record which original segment index was used
+        # Store which segment was used (for debugging if needed)
         seg_idx[k] = j
 
     return x_new, y_new, seg_idx
 
 
-def compute_deviation_from_csv_simple(
-    lane_csv,
-    veh_csv,
-    x_col="x",
-    y_col="y",
-    step=0.25,
-    out_csv=None
+
+# =====================================================================
+# MAIN DEVIATION FUNCTION USING YOUR FULL ALGORITHM
+# =====================================================================
+def compute_deviation_with_overlap(
+    lane_x,
+    lane_y,
+    veh_x,
+    veh_y,
+    step=0.25
 ):
     """
-    Compute lateral deviation between a lane trajectory and a vehicle trajectory.
+    Compute lane deviation using your EXACT algorithm:
 
-    Inputs:
-        lane_csv : str
-            Path to CSV file containing lane centerline coordinates.
-        veh_csv : str
-            Path to CSV file containing vehicle trajectory coordinates.
-        x_col : str
-            Name of the x-column in both CSVs (e.g. "x").
-        y_col : str
-            Name of the y-column in both CSVs (e.g. "y").
-        step : float
-            Distance step for the uniform grid (e.g., 0.25 m).
-        out_csv : str or None
-            Optional path to save the resulting deviation data as CSV.
-
-    Method (always the same, regardless of original point counts):
-        1. Read (x, y) from both CSVs.
-        2. Compute cumulative distance for both trajectories (s_lane, s_veh).
-        3. Determine the common length:
-               common_L = min(s_lane[-1], s_veh[-1])
-        4. Create a uniform distance grid from 0 to common_L with spacing = step:
-               s_grid = [0, step, 2*step, ..., common_L]
-        5. For each grid point, perform manual linear interpolation on:
-               (s_lane, lane_x, lane_y) and (s_veh, veh_x, veh_y)
-           using:
-               x_new = x_i + (g - s_i)/(s_{i+1} - s_i) * (x_{i+1} - x_i)
-        6. Compute point-wise Euclidean deviation between the two
-           interpolated trajectories.
-        7. Return a DataFrame with:
-               s, lane_x, lane_y, veh_x, veh_y, deviation,
-               lane_seg_idx, veh_seg_idx
-
-    This ensures both trajectories are compared on the same physical distance axis
-    and the same grid, even if original sampling rates or point counts differ.
+    ALGORITHM STEPS
+    ---------------
+    1. Compute cumulative distance of raw lane and vehicle.
+    2. Interpolate BOTH trajectories independently at 0.25m spacing.
+    3. Choose the SHORTER interpolated trajectory.
+    4. Use the shorter one's:
+           - First point  → nearest point on the longer → start align index
+           - Last point   → nearest point on the longer → end align index
+    5. Crop both trajectories to the common overlapping region.
+    6. Recompute cumulative distances for both CROPPED paths.
+    7. Create a COMMON s_grid using minimum length of both cropped paths.
+    8. Re-interpolate BOTH cropped paths onto that same s_grid.
+    9. Compute deviation = Euclidean distance point-to-point.
     """
 
-    # -----------------------------
-    # Step 1: read CSVs
-    # -----------------------------
-    # Read lane and vehicle trajectories from CSV files
-    lane_df = pd.read_csv(lane_csv)
-    veh_df  = pd.read_csv(veh_csv)
+    # ------------------------------------------------------------
+    # STEP 1: Compute cumulative distance for RAW inputs
+    # ------------------------------------------------------------
+    def cumulative_distance(x, y):
+        dx = np.diff(x)
+        dy = np.diff(y)
+        seg_len = np.sqrt(dx*dx + dy*dy)
+        return np.insert(np.cumsum(seg_len), 0, 0.0)
 
-    # Extract x and y columns as NumPy arrays
-    lane_x = lane_df[x_col].to_numpy()
-    lane_y = lane_df[y_col].to_numpy()
+    s_lane_raw = cumulative_distance(lane_x, lane_y)
+    s_veh_raw  = cumulative_distance(veh_x, veh_y)
 
-    veh_x  = veh_df[x_col].to_numpy()
-    veh_y  = veh_df[y_col].to_numpy()
+    L_lane_raw = s_lane_raw[-1]
+    L_veh_raw  = s_veh_raw[-1]
 
-    # Store number of points for basic info
-    n_lane = len(lane_x)
-    n_veh  = len(veh_x)
+    # ------------------------------------------------------------
+    # STEP 2: Interpolate BOTH paths independently at step=0.25m
+    # ------------------------------------------------------------
+    s_lane_grid = np.arange(0.0, L_lane_raw + 1e-9, step)
+    s_veh_grid  = np.arange(0.0, L_veh_raw + 1e-9, step)
 
-    print(f"[INFO] Lane points: {n_lane}, Vehicle points: {n_veh}")
-
-    # We need at least 2 points in each trajectory to build segments
-    if n_lane < 2 or n_veh < 2:
-        raise ValueError("Both trajectories must have at least 2 points for interpolation.")
-
-    # -----------------------------
-    # Step 2: cumulative distances
-    # -----------------------------
-    # Compute segment-wise differences for lane: dx, dy between consecutive points
-    dx_lane = np.diff(lane_x)
-    dy_lane = np.diff(lane_y)
-    # Segment lengths for lane
-    lane_seg_len = np.sqrt(dx_lane**2 + dy_lane**2) # (Local distances)Euclidean distance between consecutive points
-    # Cumulative distance along lane, starting from 0.0
-    s_lane = np.insert(np.cumsum(lane_seg_len), 0, 0.0) # (Global Distance axis) cumulative sum of segment lengths
-
-    # Same process for vehicle trajectory
-    dx_veh = np.diff(veh_x)
-    dy_veh = np.diff(veh_y)
-    veh_seg_len = np.sqrt(dx_veh**2 + dy_veh**2) 
-    s_veh = np.insert(np.cumsum(veh_seg_len), 0, 0.0)
-
-    # -----------------------------
-    # Step 3: common length & grid
-    # -----------------------------
-    # Use only the overlapping distance range of the two trajectories (taking the minimum length)
-    common_L = min(s_lane[-1], s_veh[-1])
-    print(f"[INFO] Common length used: {common_L:.2f} m")
-
-    # Build a uniform grid of distances from 0 to common_L
-    # with spacing = step (e.g., 0.25 m)
-    s_grid = np.arange(0.0, common_L + 1e-9, step)  # 0, step, 2*step, ...
-
-    # -----------------------------
-    # Step 4: interpolate both trajectories on the same grid
-    # -----------------------------
-    # Interpolate lane trajectory onto s_grid
-    lane_x_used, lane_y_used, lane_seg_idx = interpolate_with_segments(
-        s_lane, lane_x, lane_y, s_grid
+    lane_x_i, lane_y_i, _ = interpolate_with_segments(
+        s_lane_raw, lane_x, lane_y, s_lane_grid
+    )
+    veh_x_i, veh_y_i, _ = interpolate_with_segments(
+        s_veh_raw, veh_x, veh_y, s_veh_grid
     )
 
-    # Interpolate vehicle trajectory onto s_grid
-    veh_x_used, veh_y_used, veh_seg_idx = interpolate_with_segments(
-        s_veh, veh_x, veh_y, s_grid
+    # ------------------------------------------------------------
+    # STEP 3: Decide which interpolated path is shorter
+    # ------------------------------------------------------------
+    if L_lane_raw <= L_veh_raw:
+        short_x, short_y, short_s = lane_x_i, lane_y_i, s_lane_grid
+        long_x,  long_y,  long_s  = veh_x_i, veh_y_i, s_veh_grid
+        short_name = "lane"
+    else:
+        short_x, short_y, short_s = veh_x_i, veh_y_i, s_veh_grid
+        long_x,  long_y,  long_s  = lane_x_i, lane_y_i, s_lane_grid
+        short_name = "veh"
+
+    # ------------------------------------------------------------
+    # STEP 4: Find nearest START and END positions on the longer path
+    # ------------------------------------------------------------
+    def find_nearest_index(x_arr, y_arr, px, py):
+        dx = x_arr - px
+        dy = y_arr - py
+        dist2 = dx*dx + dy*dy
+        idx = np.argmin(dist2)
+        return idx
+
+    # First point of shorter path
+    start_idx_long = find_nearest_index(long_x, long_y, short_x[0], short_y[0])
+
+    # Last point of shorter path
+    end_idx_long = find_nearest_index(long_x, long_y, short_x[-1], short_y[-1])
+
+    # Ensure ordering
+    if end_idx_long < start_idx_long:
+        start_idx_long, end_idx_long = end_idx_long, start_idx_long
+
+    # ------------------------------------------------------------
+    # STEP 5: Crop both paths to the overlapping region
+    # ------------------------------------------------------------
+    # Shorter path → keep whole thing
+    short_x_crop = short_x
+    short_y_crop = short_y
+
+    # Longer path → keep only matched segment
+    long_x_crop  = long_x[start_idx_long : end_idx_long + 1]
+    long_y_crop  = long_y[start_idx_long : end_idx_long + 1]
+
+    # ------------------------------------------------------------
+    # STEP 6: Recompute s-values for the cropped paths
+    # ------------------------------------------------------------
+    s_short_crop = cumulative_distance(short_x_crop, short_y_crop)
+    s_long_crop  = cumulative_distance(long_x_crop,  long_y_crop)
+
+    L_short_crop = s_short_crop[-1]
+    L_long_crop  = s_long_crop[-1]
+
+    # The usable overlapping length is the minimum of the two
+    L_common = min(L_short_crop, L_long_crop)
+
+    # ------------------------------------------------------------
+    # STEP 7: Build final common grid
+    # ------------------------------------------------------------
+    s_grid = np.arange(0.0, L_common + 1e-9, step)
+
+    # ------------------------------------------------------------
+    # STEP 8: Final interpolation of both cropped paths
+    # ------------------------------------------------------------
+    short_x_final, short_y_final, _ = interpolate_with_segments(
+        s_short_crop, short_x_crop, short_y_crop, s_grid
+    )
+    long_x_final, long_y_final, _ = interpolate_with_segments(
+        s_long_crop, long_x_crop, long_y_crop, s_grid
     )
 
-    # -----------------------------
-    # Step 5: Euclidean deviation
-    # -----------------------------
-    # Compute point-wise difference in x and y
-    dx = veh_x_used - lane_x_used
-    dy = veh_y_used - lane_y_used
+    # ------------------------------------------------------------
+    # STEP 9: Map short/long back to lane/vehicle
+    # ------------------------------------------------------------
+    if short_name == "lane":
+        lane_x_f, lane_y_f = short_x_final, short_y_final
+        veh_x_f,  veh_y_f  = long_x_final,  long_y_final
+    else:
+        veh_x_f,  veh_y_f  = short_x_final, short_y_final
+        lane_x_f, lane_y_f = long_x_final,  long_y_final
 
-    # Euclidean distance between lane and vehicle at each grid point
-    deviation = np.sqrt(dx**2 + dy**2)
+    # ------------------------------------------------------------
+    # STEP 10: Compute deviation
+    # ------------------------------------------------------------
+    dx = veh_x_f - lane_x_f
+    dy = veh_y_f - lane_y_f
+    deviation = np.sqrt(dx*dx + dy*dy)
 
-    # -----------------------------
-    # Step 6: assemble DataFrame
-    # -----------------------------
-    # Build a DataFrame with all relevant information
-    data = {
-        "s": s_grid,              # distance from start (common grid)
-        "lane_x": lane_x_used,    # interpolated lane x
-        "lane_y": lane_y_used,    # interpolated lane y
-        "veh_x":  veh_x_used,     # interpolated vehicle x
-        "veh_y":  veh_y_used,     # interpolated vehicle y
-        "deviation": deviation,   # Euclidean deviation at each grid point
-        # segment indices: which original segment [i, i+1]
-        # was used to interpolate each grid point
-        "lane_seg_idx": lane_seg_idx,
-        "veh_seg_idx":  veh_seg_idx,
-    }
-    df_dev = pd.DataFrame(data)
-
-    # optional: save to CSV
-    if out_csv is not None:
-        df_dev.to_csv(out_csv, index=False)
-        print(f"[INFO] Deviation data saved to: {out_csv}")
-
-    # Print some summary statistics
-    print(f"[INFO] Mean deviation: {deviation.mean():.3f} m")
-    print(f"[INFO] RMS deviation:  {np.sqrt((deviation**2).mean()):.3f} m")
-
-    return df_dev
+    return s_grid, lane_x_f, lane_y_f, veh_x_f, veh_y_f, deviation
 
 
-# Example usage
+
+# =====================================================================
+# EXAMPLE USAGE
+# =====================================================================
 if __name__ == "__main__":
-    # Input CSV paths for lane and vehicle trajectories
-    lane_file = "lane_csv.csv"
-    veh_file  = "veh_csv.csv"
+    lane_df = pd.read_csv("lane_csv.csv")
+    veh_df  = pd.read_csv("veh_csv.csv")
 
-    # Run deviation computation on these files
-    df_result = compute_deviation_from_csv_simple(
-        lane_csv=lane_file,
-        veh_csv=veh_file,
-        x_col="x",   # column names in your CSV files
-        y_col="y",
-        step=0.25,   # grid spacing in meters
-        out_csv="deviation_output.csv"
+    lane_x = lane_df["x"].to_numpy()
+    lane_y = lane_df["y"].to_numpy()
+    veh_x  = veh_df["x"].to_numpy()
+    veh_y  = veh_df["y"].to_numpy()
+
+    s_grid, lane_x_f, lane_y_f, veh_x_f, veh_y_f, dev = compute_deviation_with_overlap(
+        lane_x, lane_y, veh_x, veh_y, step=0.25
     )
+
+    result_df = pd.DataFrame({
+        "s": s_grid,
+        "lane_x": lane_x_f,
+        "lane_y": lane_y_f,
+        "veh_x": veh_x_f,
+        "veh_y": veh_y_f,
+        "deviation": dev
+    })
+
+    result_df.to_csv("deviation_output.csv", index=False)
+
+    print("Mean deviation:", dev.mean())
+    print("Max deviation:", dev.max())
